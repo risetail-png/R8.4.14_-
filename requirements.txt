@@ -1,0 +1,7 @@
+pikepdf>=8.0.0
+pypdf>=4.0.0
+pdf2image>=1.16.0
+Pillow>=10.0.0
+pytesseract>=0.3.10
+tkinterdnd2>=0.3.0
+pyinstaller>=6.0.0
