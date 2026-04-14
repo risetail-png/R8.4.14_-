@@ -1,0 +1,144 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+    - name: リポジトリを取得
+      uses: actions/checkout@v4
+
+    - name: Python 3.11 をセットアップ
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Tesseract OCR（日本語付き）をインストール
+      run: |
+        choco install tesseract --params="/Japanese" -y
+        echo "C:\Program Files\Tesseract-OCR" | Out-File -Append -FilePath $env:GITHUB_PATH
+
+    - name: Poppler をダウンロードして配置
+      run: |
+        $url = "https://github.com/oschwartz10612/poppler-windows/releases/download/v24.02.0-0/Release-24.02.0-0.zip"
+        Invoke-WebRequest -Uri $url -OutFile poppler.zip
+        Expand-Archive -Path poppler.zip -DestinationPath C:\poppler -Force
+        $bin = Get-ChildItem C:\poppler -Recurse -Filter "pdftoppm.exe" | Select-Object -First 1 -ExpandProperty DirectoryName
+        echo $bin | Out-File -Append -FilePath $env:GITHUB_PATH
+        echo "POPPLER_BIN=$bin" | Out-File -Append -FilePath $env:GITHUB_ENV
+
+    - name: 動作確認
+      run: |
+        pdftoppm -v
+        tesseract --list-langs
+
+    - name: Pythonライブラリをインストール
+      run: |
+        pip install --upgrade pip
+        pip install pikepdf pypdf pdf2image pillow pytesseract pyinstaller tkinterdnd2
+
+    - name: EXEをビルド
+      run: |
+        $bin = $env:POPPLER_BIN
+        $spec = @"
+        # -*- mode: python -*-
+        import os
+        from PyInstaller.utils.hooks import collect_all
+
+        binaries = []
+        for exe in ['pdftoppm.exe', 'pdfinfo.exe', 'pdftopdf.exe', 'pdftotext.exe']:
+            p = os.path.join(r'$bin', exe)
+            if os.path.exists(p):
+                binaries.append((p, 'poppler'))
+
+        datas_tk, binaries_tk, hiddenimports_tk = collect_all('tkinterdnd2')
+
+        a = Analysis(
+            ['bridge_pdf_link_app.py'],
+            binaries=binaries + binaries_tk,
+            datas=datas_tk,
+            hiddenimports=hiddenimports_tk + ['PIL._tkinter_finder'],
+        )
+        pyz = PYZ(a.pure)
+        exe = EXE(pyz, a.scripts, a.binaries, a.datas,
+                  name='橋梁点検PDFリンク追加ツール',
+                  console=False, onefile=True)
+        "@
+        $spec | Out-File -FilePath build.spec -Encoding utf8
+        pyinstaller build.spec
+
+    - name: ビルド成果物をアップロード
+      uses: actions/upload-artifact@v4
+      with:
+        name: 橋梁点検PDFリンク追加ツール-Windows
+        path: dist/橋梁点検PDFリンク追加ツール.exe
+        retention-days: 30
+
+  build-mac:
+    runs-on: macos-latest
+
+    steps:
+    - name: リポジトリを取得
+      uses: actions/checkout@v4
+
+    - name: Python 3.11 をセットアップ
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Tesseract と Poppler をインストール
+      run: |
+        brew install tesseract tesseract-lang poppler
+
+    - name: 動作確認
+      run: |
+        pdftoppm -v
+        tesseract --list-langs
+
+    - name: Pythonライブラリをインストール
+      run: |
+        pip install --upgrade pip
+        pip install pikepdf pypdf pdf2image pillow pytesseract pyinstaller tkinterdnd2
+
+    - name: アプリをビルド
+      run: |
+        POPPLER_BIN=$(dirname $(which pdftoppm))
+        python3 - << EOF
+        import os, subprocess
+
+        binaries = []
+        for exe in ['pdftoppm', 'pdfinfo', 'pdftopdf', 'pdftotext']:
+            p = os.path.join('$POPPLER_BIN', exe)
+            if os.path.exists(p):
+                binaries.append(f"('{p}', 'poppler')")
+
+        spec = f"""
+        from PyInstaller.utils.hooks import collect_all
+        datas_tk, binaries_tk, hiddenimports_tk = collect_all('tkinterdnd2')
+        a = Analysis(
+            ['bridge_pdf_link_app.py'],
+            binaries=[{', '.join(binaries)}] + binaries_tk,
+            datas=datas_tk,
+            hiddenimports=hiddenimports_tk + ['PIL._tkinter_finder'],
+        )
+        pyz = PYZ(a.pure)
+        exe = EXE(pyz, a.scripts, a.binaries, a.datas,
+                  name='橋梁点検PDFリンク追加ツール',
+                  console=False, onefile=True)
+        """
+        with open('build.spec', 'w') as f:
+            f.write(spec)
+        subprocess.run(['pyinstaller', 'build.spec'], check=True)
+        EOF
+
+    - name: ビルド成果物をアップロード
+      uses: actions/upload-artifact@v4
+      with:
+        name: 橋梁点検PDFリンク追加ツール-Mac
+        path: dist/橋梁点検PDFリンク追加ツール
+        retention-days: 30
